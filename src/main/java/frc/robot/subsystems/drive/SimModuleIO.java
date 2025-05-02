@@ -1,153 +1,137 @@
+// Copyright 2021-2025 FRC 6328
+// http://github.com/Mechanical-Advantage
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// version 3 as published by the Free Software Foundation or
+// available in the root directory of this project.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+
 package frc.robot.subsystems.drive;
 
+import static edu.wpi.first.units.Units.KilogramSquareMeters;
+
+
+import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Twist2d;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
+import edu.wpi.first.math.system.plant.DCMotor;
+import edu.wpi.first.math.system.plant.LinearSystemId;
+import edu.wpi.first.math.util.Units;
+import edu.wpi.first.units.measure.MomentOfInertia;
 import edu.wpi.first.units.measure.Voltage;
-import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.simulation.DCMotorSim;
 
+/**
+ * Physics sim implementation of module IO. The sim models are configured using a set of module
+ * constants from Phoenix. Simulation is always based on voltage control.
+ */
+public class SimModuleIO implements ModuleIO {
+  // TunerConstants doesn't support separate sim constants, so they are declared locally
+  private static final double DRIVE_KP = 0.05;
+  private static final double DRIVE_KD = 0.0;
+  private static final double DRIVE_KS = 0.0;
+  private static final double DRIVE_KV_ROT =
+      0.91035; // Same units as TunerConstants: (volt * secs) / rotation
+  private static final double DRIVE_KV = 1.0 / Units.rotationsToRadians(1.0 / DRIVE_KV_ROT);
+  private static final double TURN_KP = 8.0;
+  private static final double TURN_KD = 0.0;
+  private static final DCMotor DRIVE_GEARBOX = DCMotor.getKrakenX60Foc(1);
+  private static final DCMotor TURN_GEARBOX = DCMotor.getKrakenX60Foc(1);
 
+  private final DCMotorSim driveSim;
+  private final DCMotorSim turnSim;
 
-public class SimModuleIO implements ModuleIO
-{
+  private boolean driveClosedLoop = true;
+  private boolean turnClosedLoop = true;
+  private PIDController driveController = new PIDController(DRIVE_KP, 0, DRIVE_KD);
+  private PIDController turnController = new PIDController(TURN_KP, 0, TURN_KD);
+  private double driveFFVolts = 0.0;
+  private double driveAppliedVolts = 0.0;
+  private double turnAppliedVolts = 0.0;
+    // These are only used for simulation
+  private static final MomentOfInertia SteerInertia = KilogramSquareMeters.of(0.004);
+  private static final MomentOfInertia DriveInertia = KilogramSquareMeters.of(0.025);
+  private SwerveModulePosition last = new SwerveModulePosition(0, Rotation2d.kZero);
+  private SwerveModulePosition state = new SwerveModulePosition(0, Rotation2d.kZero);
 
-  //THANKS TO BRONC BOTZ FOR THIS WORK OF ART
-  // * Do note this is modified to include getting the change in module position as to use for a simulated gyroscope
+  public SimModuleIO(SwerveModuleConstants constants) {
+    // Create drive and turn sim models
+    driveSim =
+        new DCMotorSim(
+            LinearSystemId.createDCMotorSystem(
+                DRIVE_GEARBOX, DriveInertia.baseUnitMagnitude(), constants.THROTTLE_RATIO),
+            DRIVE_GEARBOX);
+    turnSim =
+        new DCMotorSim(
+            LinearSystemId.createDCMotorSystem(
+                TURN_GEARBOX, SteerInertia.baseUnitMagnitude(), constants.STEER_RATIO),
+            TURN_GEARBOX);
 
-  /**
-   * Main timer to simulate the passage of time.
-   */
-  private final Timer             timer;
-  /**
-   * Time delta since last update
-   */
-  private       double            dt;
-  /**
-   * Fake motor position.
-   */
-  private       double            pos;
-  /**
-   * The fake speed of the previous state, used to calculate {@link SimModuleIO#fakePos}.
-   */
-  private       double            speed;
-  /**
-   * Last time queried.
-   */
-  private       double            lastTime;
-
-  private       double             lastPos;
-
-  /**
-   * Current simulated swerve module state.
-   */
-  private SwerveModuleState state;
-  private SwerveModulePosition last;
-
-  /**
-   * Create simulation class and initialize everything at 0.
-   */
-  public SimModuleIO()
-  {
-    timer = new Timer();
-    timer.start();
-    lastTime = timer.get();
-    state = new SwerveModuleState(0, Rotation2d.fromDegrees(0));
-    speed = 0;
-    pos = 0;
-    dt = 0;
-    lastPos = 0;
-    last = new SwerveModulePosition(0, Rotation2d.fromDegrees(0));
-
-    setState(new SwerveModuleState());
+    // Enable wrapping for turn PID
+    turnController.enableContinuousInput(-Math.PI, Math.PI);
   }
 
   @Override
-  public void updateInputs(ModuleIOInputs inputs)
-  {
-    // Update the inputs with the current state
-    inputs.absolutePosition = state.angle;
-    inputs.position = state.angle;
-    inputs.drivePosition = pos;
-    inputs.driveVelocityRadPerSec = speed;
-    inputs.steerPosition = state.angle.getDegrees();
+  public void updateInputs(ModuleIOInputs inputs) {
+    // Run closed-loop control
+    if (driveClosedLoop) {
+      driveAppliedVolts =
+          driveFFVolts + driveController.calculate(driveSim.getAngularVelocityRadPerSec());
+    } else {
+      driveController.reset();
+    }
+    if (turnClosedLoop) {
+      turnAppliedVolts = turnController.calculate(turnSim.getAngularPositionRad());
+    } else {
+      turnController.reset();
+    }
+
+    // Update simulation state
+    driveSim.setInputVoltage(MathUtil.clamp(driveAppliedVolts, -12.0, 12.0));
+    turnSim.setInputVoltage(MathUtil.clamp(turnAppliedVolts, -12.0, 12.0));
+    driveSim.update(0.02);
+    turnSim.update(0.02);
+
+    // Update drive inputs
+    inputs.driveConnected = true;
+    inputs.drivePosition = driveSim.getAngularPositionRad();
+    inputs.driveVelocityRadPerSec = driveSim.getAngularVelocityRadPerSec();
+    inputs.driveVoltage = driveAppliedVolts;
+    inputs.driveCurrent = Math.abs(driveSim.getCurrentDrawAmps());
+
+    // Update turn inputs
+    inputs.steerConnected = true;
+    inputs.encoderConnected = true;
+    inputs.absolutePosition = new Rotation2d(turnSim.getAngularPositionRad());
+    inputs.position = new Rotation2d(turnSim.getAngularPositionRad());
+    inputs.steerVelocityRadPerSec = turnSim.getAngularVelocityRadPerSec();
+    inputs.steerVoltage = turnAppliedVolts;
+    inputs.steerCurrent = Math.abs(turnSim.getCurrentDrawAmps());
+
   }
-
-  /**
-   * Update the position and state of the module. Called from {@link SwerveModuleIO.SwerveModule#setDesiredState} function
-   * when simulated.
-   *
-   * @param desiredState State the swerve module is set to.
-   */
+  
   @Override
-  public void setState(SwerveModuleState desiredState)
-  {
-    //get time delta
-    dt = timer.get() - lastTime;
-    lastTime = timer.get();
+  public void setState(SwerveModuleState state) {
 
+
+    driveFFVolts = DRIVE_KS * Math.signum(state.speedMetersPerSecond) + DRIVE_KV * state.speedMetersPerSecond;
+
+    driveController.setSetpoint(state.speedMetersPerSecond);
     
-    state = desiredState;
-    speed = desiredState.speedMetersPerSecond;
-
-    pos += (speed * dt);
-
-    lastPos = pos;
+    turnController.setSetpoint(state.angle.getRadians());
   }
 
-  /**
-   * Get the simulated swerve module position.
-   *
-   * @return {@link SwerveModulePosition} of the simulated module.
-   */
-  @Override
-  public SwerveModulePosition getPosition(boolean refresh)
-  {
-    return new SwerveModulePosition(pos, state.angle);
-  }
-
-
-  /**
-   * Get the {@link SwerveModuleState} of the simulated module.
-   *
-   * @return {@link SwerveModuleState} of the simulated module.
-   */
-  @Override
-  public SwerveModuleState getState(boolean refresh)
-  {
-    state = new SwerveModuleState(speed, state.angle);
-
-    return state;
-  }
-
-    /**
-   * get the change in the simulated swerve module position
-   * @return {@link SwerveModulePosition} of the simulated module.
-   */
-  @Override
-  public SwerveModulePosition getModuleDelta(){
-
-    var delta = new SwerveModulePosition(getPosition(true).distanceMeters - last.distanceMeters, state.angle);
-
-     last = new SwerveModulePosition(lastPos, state.angle);
-
-    return delta;
-
-  }
-
-  @Override
-  /** TODO: Simulate motors with DC motors @{see edu.wpi.first.wpilibj.simulation.DCMotorSim} */
-  public void setVoltage(Voltage volts) {}
-
-
-  /**
-   * Get the robot's current angle as a simulated Rotation2d.
-   * 
-   * @return Robot's current angle
-   */
   @Override
   public Rotation2d getRotation2d() {
-   
+ 
     getModuleDelta();
 
     var twist = new Twist2d(getModuleDelta().distanceMeters, 0, 0);
@@ -156,15 +140,33 @@ public class SimModuleIO implements ModuleIO
     moduleAngle = moduleAngle.plus(new Rotation2d(twist.dtheta));
     return moduleAngle;
     
-  } 
-
-  /**
-   * Stops the module.
-   */
-  @Override
-  public void Stop() {
-    setState(new SwerveModuleState());
   }
 
+  @Override
+  public SwerveModuleState getState(boolean refresh) {
+      return new SwerveModuleState(
+          driveSim.getAngularVelocityRadPerSec(), new Rotation2d(turnSim.getAngularPositionRad()));
+    
+  }
 
+  @Override
+  public SwerveModulePosition getPosition(boolean refresh) {
+    state = new SwerveModulePosition(driveSim.getAngularPositionRad(), new Rotation2d(turnSim.getAngularPositionRad()));
+    return state;
+  }
+
+  @Override
+  public SwerveModulePosition getModuleDelta() {
+    var delta = new SwerveModulePosition(getPosition(true).distanceMeters - last.distanceMeters, state.angle);
+
+    last = new SwerveModulePosition(driveController.getSetpoint(), state.angle);
+
+   return delta;
+  }
+
+  @Override
+  public void setVoltage(Voltage volts) {
+    // TODO Auto-generated method stub
+    throw new UnsupportedOperationException("Unimplemented method 'setVoltage'");
+  }
 }

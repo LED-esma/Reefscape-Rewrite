@@ -33,10 +33,10 @@ public class RobotContainer {
 
       case SIM:
         driveControlSystem = new DriveControlSystem(
-          new SimModuleIO(),
-          new SimModuleIO(),
-          new SimModuleIO(),
-          new SimModuleIO()
+          new SimModuleIO(Constants.SwerveConstants),
+          new SimModuleIO(Constants.SwerveConstants),
+          new SimModuleIO(Constants.SwerveConstants),
+          new SimModuleIO(Constants.SwerveConstants)
         );
 
         vision = new Vision(
@@ -44,6 +44,9 @@ public class RobotContainer {
           new VisionIOPhotonVisionSim(VisionConstants.camera0Name, VisionConstants.robotToCamera0, driveControlSystem::getPose2d)
         );
 
+        break;
+
+        case REPLAY:
         break;
     }
 
@@ -54,18 +57,8 @@ public class RobotContainer {
 
   private void configureBindings() {
 
-    driveControlSystem.setDefaultCommand(
-      new RunCommand(
-        () -> {
-
-          driveControlSystem.control(
-            new ChassisSpeeds(
-              joystick1.getY(),
-              joystick1.getX(),
-              joystick1.getZ()
-            ));
-        }, driveControlSystem)
-    );
+    driveControlSystem.setDefaultCommand(driveControlSystem.control()
+    ));
 
   }
 

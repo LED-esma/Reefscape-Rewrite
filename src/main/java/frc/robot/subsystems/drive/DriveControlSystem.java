@@ -1,7 +1,6 @@
 package frc.robot.subsystems.drive;
 
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 
 import org.littletonrobotics.junction.AutoLogOutput;
 
@@ -47,7 +46,7 @@ public class DriveControlSystem implements Subsystem {
 
         driveTrain = new SwerveModuleGroup(mConfig, modules);
         
-        mGyro = new AHRS(NavXComType.kMXP_SPI);
+        //mGyro = new AHRS(NavXComType.kMXP_SPI);
 
         //initializes the pose estimator with everything it set to 0
         poseEstimator = new SwerveDrivePoseEstimator(
@@ -74,8 +73,9 @@ public class DriveControlSystem implements Subsystem {
         driveTrain.periodic();
 
 
-
     }
+
+
 
     // Drive methods
     public void control(ChassisSpeeds request) {
@@ -120,9 +120,18 @@ public class DriveControlSystem implements Subsystem {
      poseEstimator.addVisionMeasurement(visionPose, timestamp, visionMeasurementStdDevs);
     }
 
-    @AutoLogOutput
+    //get the current pose of the drive train
+    @AutoLogOutput(key = "Drive/Pose2d")
     public Pose2d getPose2d() {
-        return poseEstimator.getEstimatedPosition();
+        return poseEstimator.getEstimatedPosition();    
     }
+
+ 
+    //set the pose of the drive train
+    public void setPose2d(Pose2d pose) {
+        poseEstimator.resetPosition(getRotation2d(), driveTrain.getPositions(true), pose);
+    }
+
+
 
 }

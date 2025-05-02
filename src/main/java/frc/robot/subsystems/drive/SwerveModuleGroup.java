@@ -170,7 +170,7 @@ public class SwerveModuleGroup {
       this.io[i].updateInputs(swerveModuleInputs[i]);
 
       org.littletonrobotics.junction.Logger.processInputs(
-          "SwerveModule" + Integer.toString(i), swerveModuleInputs[i]);
+          "Drive/SwerveModule" + Integer.toString(i), swerveModuleInputs[i]);
       
 
       }
